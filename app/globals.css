@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * SDU design system — minimal, monotone, modern.
+ *
+ * Neutral zinc surfaces, hairline borders, soft shadows, generous whitespace.
+ * One restrained accent (blue) for interactive/selected state. Colour is used
+ * only to carry meaning, and sparingly:
+ *   emerald = passed / open · red = conflict / full · amber = limited seats
+ * The default Tailwind palette (zinc, blue, emerald, red, amber) is available
+ * as-is; only the tokens below are customised.
+ */
+@theme {
+  --font-sans: var(--font-onest), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* App chrome — teal brand accent (#285B6E), black ink, white surfaces */
+  --color-app: #fbfbfb;
+  --color-accent: #285b6e;
+  --color-accent-hover: #21505f;
+  --color-accent-soft: #eaf1f3;
+  --color-accent-fg: #1c4453;
+
+  /* Soft, neutral elevation — never hard offsets */
+  --shadow-xs: 0 1px 2px 0 rgb(24 24 27 / 0.04);
+  --shadow-sm: 0 1px 2px 0 rgb(24 24 27 / 0.05), 0 1px 3px 0 rgb(24 24 27 / 0.05);
+  --shadow-md: 0 2px 4px -1px rgb(24 24 27 / 0.06), 0 4px 12px -2px rgb(24 24 27 / 0.08);
+  --shadow-lg: 0 8px 24px -6px rgb(24 24 27 / 0.12), 0 2px 6px -2px rgb(24 24 27 / 0.06);
+
+  --animate-flash: flash 1.6s ease-out;
+  @keyframes flash {
+    0%,
+    25% {
+      background-color: var(--color-accent-soft);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-app text-zinc-900 font-sans antialiased;
+    font-feature-settings: "cv01", "ss01";
+  }
+  ::selection {
+    background-color: var(--color-accent-soft);
+    color: var(--color-accent-fg);
+  }
+  :focus-visible {
+    @apply outline-none;
+    box-shadow: 0 0 0 2px var(--color-app), 0 0 0 4px var(--color-accent);
+    border-radius: 4px;
+  }
+  /* Tabular figures for all the codes, credits and times. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@utility conflict-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--color-red-500) 12%, transparent) 0 7px,
+    transparent 7px 14px
+  );
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-zinc-300) transparent;
+}

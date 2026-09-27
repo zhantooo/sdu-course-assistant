@@ -1,0 +1,496 @@
+// SDU Course Registration Assistant — PostgreSQL schema.
+//
+// Ownership model:
+//   • SDU is the system of record for students, transcripts, the catalog and
+//     official enrolments. Those tables are a local *mirror*, refreshed by the
+//     sync jobs (see lib/sync) and keyed by SDU's own identifiers (sdu*Id).
+//   • This app owns planning state: staged selections, batch submissions,
+//     waitlist preferences, advisor reviews, overrides and capacity changes.
+//
+// Seat counts are always read live from SDU during registration; the
+// mirrored totals here serve search, analytics and the registrar dashboard.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ─────────────────────────────────────────────────────────────────
+
+enum Weekday {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+}
+
+enum MeetingKind {
+  LECTURE
+  PRACTICE
+  LAB
+}
+
+enum AcademicStatus {
+  ACTIVE
+  PROBATION
+  SUSPENDED
+  GRADUATED
+}
+
+enum TranscriptStatus {
+  PASSED
+  FAILED
+  IN_PROGRESS
+  WITHDRAWN
+  TRANSFERRED
+}
+
+enum SectionStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum EnrollmentStatus {
+  ENROLLED
+  DROPPED
+}
+
+enum BatchStatus {
+  PENDING
+  COMMITTED
+  REJECTED
+  FAILED
+}
+
+enum WaitlistStatus {
+  ACTIVE
+  OFFERED
+  ENROLLED
+  EXPIRED
+  CANCELLED
+}
+
+enum StaffRole {
+  ADVISOR
+  REGISTRAR
+  ADMIN
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum OverrideStatus {
+  ACTIVE
+  CONSUMED
+  REVOKED
+  EXPIRED
+}
+
+enum RequirementCategory {
+  CORE
+  MAJOR_ELECTIVE
+  GENERAL_EDUCATION
+  FREE_ELECTIVE
+}
+
+// ─── Academic structure ────────────────────────────────────────────────────
+
+model Term {
+  id                   String    @id @default(cuid())
+  code                 String    @unique // "2026-FALL"
+  name                 String // "Fall 2026"
+  startsOn             DateTime  @db.Date
+  endsOn               DateTime  @db.Date
+  registrationOpensAt  DateTime?
+  registrationClosesAt DateTime?
+  isCurrent            Boolean   @default(false)
+
+  sections         Section[]
+  stagedSelections StagedSelection[]
+  batches          RegistrationBatch[]
+  overrides        PrerequisiteOverride[]
+  reviews          ScheduleReview[]
+
+  @@map("terms")
+}
+
+model Department {
+  id      String @id @default(cuid())
+  code    String @unique // "CSS"
+  name    String
+  faculty String
+
+  courses     Course[]
+  programs    Program[]
+  instructors Instructor[]
+  staff       StaffMember[]
+
+  @@map("departments")
+}
+
+model Program {
+  id              String @id @default(cuid())
+  code            String @unique // "6B06102"
+  name            String
+  requiredCredits Int
+  departmentId    String
+
+  department   Department          @relation(fields: [departmentId], references: [id])
+  students     Student[]
+  requirements DegreeRequirement[]
+
+  @@map("programs")
+}
+
+/// Degree plan entries (Sprint 4 recommendations, Sprint 6 advisor review).
+/// A null courseId is an elective bucket, e.g. 10 credits of MAJOR_ELECTIVE.
+model DegreeRequirement {
+  id                  String              @id @default(cuid())
+  programId           String
+  courseId            String?
+  category            RequirementCategory
+  recommendedSemester Int?
+  creditsRequired     Int?
+  note                String?
+
+  program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+  course  Course? @relation(fields: [courseId], references: [id])
+
+  @@unique([programId, courseId])
+  @@index([programId, category])
+  @@map("degree_requirements")
+}
+
+// ─── People ────────────────────────────────────────────────────────────────
+
+model Student {
+  id                 String         @id @default(cuid())
+  sduStudentId       String         @unique // SDU student number, CAS principal
+  email              String         @unique
+  fullName           String
+  programId          String
+  studyYear          Int
+  academicStatus     AcademicStatus @default(ACTIVE)
+  gpa                Decimal        @db.Decimal(3, 2)
+  completedCredits   Int            @default(0)
+  advisorId          String?
+  /// Registrar-approved load exception; null means the policy default applies.
+  maxCreditsOverride Int?
+  lastSyncedAt       DateTime?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  program          Program                @relation(fields: [programId], references: [id])
+  advisor          StaffMember?           @relation("AdvisorAdvisees", fields: [advisorId], references: [id])
+  transcript       TranscriptEntry[]
+  enrollments      Enrollment[]
+  stagedSelections StagedSelection[]
+  batches          RegistrationBatch[]
+  waitlistEntries  WaitlistEntry[]
+  overrides        PrerequisiteOverride[]
+  reviews          ScheduleReview[]
+
+  @@index([advisorId])
+  @@map("students")
+}
+
+/// Advisors, registrar staff and admins (Sprints 6–7).
+model StaffMember {
+  id           String    @id @default(cuid())
+  sduStaffId   String    @unique
+  email        String    @unique
+  fullName     String
+  role         StaffRole
+  departmentId String?
+
+  department       Department?            @relation(fields: [departmentId], references: [id])
+  advisees         Student[]              @relation("AdvisorAdvisees")
+  grantedOverrides PrerequisiteOverride[]
+  reviews          ScheduleReview[]
+  capacityChanges  CapacityChange[]
+
+  @@map("staff_members")
+}
+
+model Instructor {
+  id              String  @id @default(cuid())
+  sduInstructorId String? @unique
+  fullName        String
+  email           String?
+  departmentId    String?
+
+  department Department? @relation(fields: [departmentId], references: [id])
+  sections   Section[]
+
+  @@index([fullName])
+  @@map("instructors")
+}
+
+// ─── Catalog ───────────────────────────────────────────────────────────────
+
+model Course {
+  id           String  @id @default(cuid())
+  code         String  @unique // "CSS 225"
+  title        String
+  description  String  @default("")
+  credits      Int // ECTS
+  level        Int // 100, 200, 300, 400
+  departmentId String
+  isActive     Boolean @default(true)
+
+  department        Department             @relation(fields: [departmentId], references: [id])
+  prerequisites     Prerequisite[]         @relation("CourseRequires")
+  requiredBy        Prerequisite[]         @relation("CourseRequiredBy")
+  sections          Section[]
+  transcriptEntries TranscriptEntry[]
+  requirements      DegreeRequirement[]
+  overrides         PrerequisiteOverride[]
+
+  @@index([departmentId, level])
+  @@map("courses")
+}
+
+/// Prerequisites in conjunctive normal form. Rows sharing (courseId, groupNo)
+/// are alternatives (OR); distinct groups must all hold (AND).
+///   CSS 361 ← (CSS 242 OR CSS 322)        → 2 rows, both groupNo 1
+///   CSS 311 ← CSS 225 AND CSS 216         → 2 rows, groupNo 1 and 2
+/// Walking requiredCourse → its own prerequisites yields the full tree.
+model Prerequisite {
+  id               String  @id @default(cuid())
+  courseId         String
+  requiredCourseId String
+  groupNo          Int     @default(1)
+  /// Minimum letter grade; null = any passing grade.
+  minGrade         String?
+  isCorequisite    Boolean @default(false)
+
+  course         Course @relation("CourseRequires", fields: [courseId], references: [id], onDelete: Cascade)
+  requiredCourse Course @relation("CourseRequiredBy", fields: [requiredCourseId], references: [id])
+
+  @@unique([courseId, groupNo, requiredCourseId])
+  @@index([requiredCourseId])
+  @@map("prerequisites")
+}
+
+model Section {
+  id            String        @id @default(cuid())
+  sduSectionId  String        @unique
+  courseId      String
+  termId        String
+  sectionNumber String // "01"
+  instructorId  String?
+  totalCapacity Int
+  /// Mirror of SDU's count. available = totalCapacity - enrolledCount.
+  enrolledCount Int           @default(0)
+  waitlistCount Int           @default(0)
+  status        SectionStatus @default(OPEN)
+  lastSyncedAt  DateTime?
+
+  course           Course            @relation(fields: [courseId], references: [id])
+  term             Term              @relation(fields: [termId], references: [id])
+  instructor       Instructor?       @relation(fields: [instructorId], references: [id])
+  meetings         Meeting[]
+  enrollments      Enrollment[]
+  stagedSelections StagedSelection[]
+  waitlistEntries  WaitlistEntry[]
+  capacityChanges  CapacityChange[]
+
+  @@unique([termId, courseId, sectionNumber])
+  @@index([termId, status])
+  @@index([instructorId])
+  @@map("sections")
+}
+
+/// One weekly time slot. Minutes since midnight; end is exclusive.
+/// Add in migration SQL: CHECK ("startMinute" < "endMinute").
+model Meeting {
+  id          String      @id @default(cuid())
+  sectionId   String
+  day         Weekday
+  startMinute Int
+  endMinute   Int
+  kind        MeetingKind
+  classroom   String
+
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([sectionId])
+  @@index([day, startMinute])
+  @@map("meetings")
+}
+
+// ─── Academic record ───────────────────────────────────────────────────────
+
+model TranscriptEntry {
+  id          String           @id @default(cuid())
+  studentId   String
+  courseId    String
+  termCode    String
+  letterGrade String?
+  gradePoints Decimal?         @db.Decimal(3, 2)
+  credits     Int
+  status      TranscriptStatus
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id])
+
+  @@unique([studentId, courseId, termCode])
+  @@index([studentId, status])
+  @@map("transcript_entries")
+}
+
+// ─── Registration (app-owned) ──────────────────────────────────────────────
+
+/// The student's planning cart for a term (Sprints 1–4).
+model StagedSelection {
+  studentId String
+  sectionId String
+  termId    String
+  createdAt DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  term    Term    @relation(fields: [termId], references: [id])
+
+  @@id([studentId, sectionId])
+  @@index([studentId, termId])
+  @@map("staged_selections")
+}
+
+/// One atomic submission to SDU's batch-submit endpoint (Sprint 5).
+model RegistrationBatch {
+  id               String      @id @default(cuid())
+  studentId        String
+  termId           String
+  /// Sent as the Idempotency-Key header; makes retries safe.
+  idempotencyKey   String      @unique
+  status           BatchStatus @default(PENDING)
+  sectionIds       String[]
+  sduTransactionId String?
+  /// Raw per-section results from SDU, kept for support and audit.
+  response         Json?
+  submittedAt      DateTime    @default(now())
+  completedAt      DateTime?
+
+  student     Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  term        Term         @relation(fields: [termId], references: [id])
+  enrollments Enrollment[]
+
+  @@index([studentId, termId])
+  @@map("registration_batches")
+}
+
+model Enrollment {
+  id         String           @id @default(cuid())
+  studentId  String
+  sectionId  String
+  status     EnrollmentStatus @default(ENROLLED)
+  batchId    String?
+  enrolledAt DateTime         @default(now())
+  droppedAt  DateTime?
+
+  student Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section Section            @relation(fields: [sectionId], references: [id])
+  batch   RegistrationBatch? @relation(fields: [batchId], references: [id])
+
+  @@unique([studentId, sectionId])
+  @@index([sectionId, status])
+  @@map("enrollments")
+}
+
+/// Sprint 5: automatic waitlist. `autoEnroll` lets the worker claim a freed
+/// seat on the student's behalf when it clears their schedule rules.
+model WaitlistEntry {
+  id             String         @id @default(cuid())
+  studentId      String
+  sectionId      String
+  position       Int
+  status         WaitlistStatus @default(ACTIVE)
+  autoEnroll     Boolean        @default(true)
+  offeredAt      DateTime?
+  offerExpiresAt DateTime?
+  createdAt      DateTime       @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, sectionId])
+  @@index([sectionId, status, position])
+  @@map("waitlist_entries")
+}
+
+// ─── Advising & administration ─────────────────────────────────────────────
+
+/// Sprint 6: advisor sign-off on a student's term plan.
+model ScheduleReview {
+  id             String       @id @default(cuid())
+  studentId      String
+  termId         String
+  advisorId      String?
+  status         ReviewStatus @default(PENDING)
+  /// Issue codes raised by the rules engine, e.g. ["TIME_CONFLICT","CREDIT_LIMIT"].
+  flags          Json         @default("[]")
+  studentNote    String?
+  advisorComment String?
+  submittedAt    DateTime     @default(now())
+  reviewedAt     DateTime?
+
+  student Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  term    Term         @relation(fields: [termId], references: [id])
+  advisor StaffMember? @relation(fields: [advisorId], references: [id])
+
+  @@unique([studentId, termId])
+  @@index([advisorId, status])
+  @@map("schedule_reviews")
+}
+
+/// Sprint 7: advisor-granted prerequisite exception for one course in one term.
+model PrerequisiteOverride {
+  id          String         @id @default(cuid())
+  studentId   String
+  courseId    String
+  termId      String
+  grantedById String
+  reason      String
+  status      OverrideStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  createdAt   DateTime       @default(now())
+  revokedAt   DateTime?
+
+  student   Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course    Course      @relation(fields: [courseId], references: [id])
+  term      Term        @relation(fields: [termId], references: [id])
+  grantedBy StaffMember @relation(fields: [grantedById], references: [id])
+
+  @@unique([studentId, courseId, termId])
+  @@index([grantedById])
+  @@map("prerequisite_overrides")
+}
+
+/// Sprint 7: registrar capacity adjustments, pushed to SDU and audited here.
+model CapacityChange {
+  id               String    @id @default(cuid())
+  sectionId        String
+  changedById      String
+  previousCapacity Int
+  newCapacity      Int
+  reason           String
+  syncedToSduAt    DateTime?
+  createdAt        DateTime  @default(now())
+
+  section   Section     @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  changedBy StaffMember @relation(fields: [changedById], references: [id])
+
+  @@index([sectionId, createdAt])
+  @@map("capacity_changes")
+}
