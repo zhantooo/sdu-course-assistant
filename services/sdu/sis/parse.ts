@@ -168,19 +168,22 @@ export function parseCurriculum(doc: HTMLElement): CurriculumCourse[] {
       if (i < 0) continue;
       const code = c[i];
       const rest = c.slice(i).join(" ");
-      const grade = c[i + 5] ?? "";
-      const statusCell = c[i + 6] ?? "";
+      // Column layout relative to the course-code cell (SIS `course_struct`):
+      // code(i) | name(i+1) | (blank) | teor(i+3) | pr(i+4) | cr(i+5) | ects(i+6) |
+      // grade(i+7) | requisites(i+8) | status(i+9) | Syllabus.
+      const grade = c[i + 7] ?? "";
+      const statusCell = c[i + 9] ?? "";
 
       let standing: CurriculumCourse["standing"] = "planned";
       if (/available/i.test(statusCell) || /\bAvailable\b/.test(rest)) standing = "available";
       else if (grade === "IP") standing = "in_progress";
-      else if (grade && grade !== "") standing = "done";
+      else if (/^[A-DFPWX][+-]?$|^FX$|^NP$|^AW$/.test(grade)) standing = "done";
 
       const rec: CurriculumCourse = {
         code,
         title: c[i + 1] ?? code,
-        credits: Number(c[i + 3]) || 0,
-        ects: Number(c[i + 4]) || 0,
+        credits: Number(c[i + 5]) || 0,
+        ects: Number(c[i + 6]) || 0,
         standing,
         grade: standing === "done" ? grade : null,
       };
