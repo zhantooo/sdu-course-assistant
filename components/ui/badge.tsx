@@ -10,6 +10,7 @@ const badgeVariants = cva(
         neutral: "bg-zinc-100 text-zinc-600",
         ink: "bg-zinc-900 text-white",
         success: "bg-accent-soft text-accent-fg",
+        positive: "bg-emerald-50 text-emerald-700",
         warning: "bg-amber-50 text-amber-700",
         danger: "bg-red-50 text-red-600",
         info: "bg-accent-soft text-accent-fg",

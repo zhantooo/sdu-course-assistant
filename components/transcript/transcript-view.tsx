@@ -6,14 +6,23 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { StudentProfile, TranscriptEntry, Transcript, TranscriptStatus } from "@/lib/domain/types";
+import { cn } from "@/lib/utils";
 
-const STATUS_TONE: Record<TranscriptStatus, "success" | "danger" | "neutral" | "info"> = {
-  PASSED: "success",
-  TRANSFERRED: "success",
-  FAILED: "danger",
-  WITHDRAWN: "neutral",
-  IN_PROGRESS: "info",
+type StatusTone = "positive" | "danger" | "info";
+
+// Passed / transferred read green, failed / withdrawn read red, in-progress teal.
+const STATUS_META: Record<TranscriptStatus, { tone: StatusTone; label: string; dot: string }> = {
+  PASSED: { tone: "positive", label: "Passed", dot: "bg-emerald-500" },
+  TRANSFERRED: { tone: "positive", label: "Transferred", dot: "bg-emerald-500" },
+  IN_PROGRESS: { tone: "info", label: "In progress", dot: "bg-accent" },
+  WITHDRAWN: { tone: "danger", label: "Withdrawn", dot: "bg-red-500" },
+  FAILED: { tone: "danger", label: "Failed", dot: "bg-red-500" },
 };
+
+// Order the status filter chips: earned first, then in-progress, then the flags.
+const STATUS_ORDER: TranscriptStatus[] = ["PASSED", "TRANSFERRED", "IN_PROGRESS", "WITHDRAWN", "FAILED"];
+
+type StatusFilter = TranscriptStatus | "ALL";
 
 function termSortKey(code: string) {
   const [year, season] = code.split("-");
@@ -29,25 +38,34 @@ const normalize = (v: string) => v.toLowerCase().replace(/\s+/g, "");
 
 export function TranscriptView({ profile, transcript }: { profile: StudentProfile; transcript: Transcript }) {
   const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("ALL");
 
   // Stats always reflect the full record, not the filtered view.
   const passedCount = transcript.entries.filter((e) => e.status === "PASSED" || e.status === "TRANSFERRED").length;
   const needsAttention = transcript.entries.filter((e) => e.status === "FAILED" || e.status === "WITHDRAWN").length;
   const progress = transcript.completedCredits / profile.requiredCredits;
 
+  // How many courses carry each status — powers the filter chips (and their counts).
+  const statusCounts = useMemo(() => {
+    const counts = {} as Record<TranscriptStatus, number>;
+    for (const e of transcript.entries) counts[e.status] = (counts[e.status] ?? 0) + 1;
+    return counts;
+  }, [transcript.entries]);
+
   const filtered = useMemo(() => {
     const q = normalize(query);
-    const entries = q
-      ? transcript.entries.filter(
-          (e) => normalize(e.courseCode).includes(q) || e.courseTitle.toLowerCase().includes(query.toLowerCase()),
-        )
-      : transcript.entries;
+    const entries = transcript.entries.filter((e) => {
+      if (status !== "ALL" && e.status !== status) return false;
+      if (!q) return true;
+      return normalize(e.courseCode).includes(q) || e.courseTitle.toLowerCase().includes(query.toLowerCase());
+    });
     const terms = new Map<string, TranscriptEntry[]>();
     for (const entry of entries) terms.set(entry.termCode, [...(terms.get(entry.termCode) ?? []), entry]);
     return [...terms.entries()].sort(([a], [b]) => termSortKey(b) - termSortKey(a));
-  }, [transcript.entries, query]);
+  }, [transcript.entries, query, status]);
 
   const matchCount = filtered.reduce((n, [, entries]) => n + entries.length, 0);
+  const activeChips = STATUS_ORDER.filter((s) => statusCounts[s] > 0);
 
   return (
     <div className="space-y-6">
@@ -70,26 +88,42 @@ export function TranscriptView({ profile, transcript }: { profile: StudentProfil
         <Stat label="Failed / withdrawn" value={`${needsAttention}`} tone={needsAttention > 0 ? "danger" : undefined} />
       </div>
 
-      <label className="relative block max-w-md">
-        <span className="sr-only">Search completed courses</span>
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-zinc-400" aria-hidden />
-        <Input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search your completed courses…"
-          className="pl-9"
-        />
-      </label>
-      {query && (
+      <div className="space-y-3">
+        <label className="relative block max-w-md">
+          <span className="sr-only">Search completed courses</span>
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-zinc-400" aria-hidden />
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search your completed courses…"
+            className="pl-9"
+          />
+        </label>
+
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter courses by status">
+          <StatusChip active={status === "ALL"} onClick={() => setStatus("ALL")} count={transcript.entries.length}>
+            All
+          </StatusChip>
+          {activeChips.map((s) => (
+            <StatusChip key={s} active={status === s} onClick={() => setStatus(s)} count={statusCounts[s]} dot={STATUS_META[s].dot}>
+              {STATUS_META[s].label}
+            </StatusChip>
+          ))}
+        </div>
+      </div>
+
+      {(query || status !== "ALL") && (
         <p className="-mt-3 text-xs text-zinc-400" aria-live="polite">
-          <span className="tnum font-medium text-zinc-600">{matchCount}</span> course{matchCount === 1 ? "" : "s"} match “{query}”
+          <span className="tnum font-medium text-zinc-600">{matchCount}</span> course{matchCount === 1 ? "" : "s"}
+          {status !== "ALL" ? ` marked ${STATUS_META[status as TranscriptStatus].label.toLowerCase()}` : ""}
+          {query ? ` matching “${query}”` : ""}
         </p>
       )}
 
       {filtered.length === 0 ? (
         <p className="rounded-xl border border-dashed border-zinc-200 px-4 py-10 text-center text-sm text-zinc-400">
-          No completed courses match “{query}”.
+          No courses match the current filters.
         </p>
       ) : (
         <div className="grid gap-6 xl:grid-cols-2">
@@ -123,7 +157,7 @@ export function TranscriptView({ profile, transcript }: { profile: StudentProfil
                             {e.letterGrade ?? "—"}
                           </td>
                           <td className="px-5 py-2.5 text-right">
-                            <Badge tone={STATUS_TONE[e.status]}>{e.status.replace("_", " ").toLowerCase()}</Badge>
+                            <Badge tone={STATUS_META[e.status].tone}>{STATUS_META[e.status].label}</Badge>
                           </td>
                         </tr>
                       ))}
@@ -136,6 +170,38 @@ export function TranscriptView({ profile, transcript }: { profile: StudentProfil
         </div>
       )}
     </div>
+  );
+}
+
+function StatusChip({
+  active,
+  onClick,
+  count,
+  dot,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  count: number;
+  dot?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+        active
+          ? "border-zinc-900 bg-zinc-900 text-white"
+          : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50",
+      )}
+    >
+      {dot && <span className={cn("size-1.5 rounded-full", active ? "bg-white" : dot)} aria-hidden />}
+      {children}
+      <span className={cn("tnum font-mono text-[10px]", active ? "text-white/70" : "text-zinc-400")}>{count}</span>
+    </button>
   );
 }
 
