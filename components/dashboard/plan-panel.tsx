@@ -1,7 +1,8 @@
 "use client";
 
-import { AlertTriangle, CircleSlash, ListChecks, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleSlash, ListChecks, Loader2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Meter } from "@/components/ui/meter";
 import type { Course, Section } from "@/lib/domain/types";
@@ -19,8 +20,11 @@ interface PlanPanelProps {
   conflictIds: ReadonlySet<string>;
   focusedId: string | null;
   flashIds: ReadonlySet<string>;
+  submitting: boolean;
+  registered: boolean;
   onFocus: (sectionId: string) => void;
   onRemove: (sectionId: string) => void;
+  onConfirmRegister: () => void;
 }
 
 export function PlanPanel({
@@ -32,10 +36,14 @@ export function PlanPanel({
   conflictIds,
   focusedId,
   flashIds,
+  submitting,
+  registered,
   onFocus,
   onRemove,
+  onConfirmRegister,
 }: PlanPanelProps) {
   const fullStaged = sections.filter((s) => s.availableSeats <= 0);
+  const blocked = summary.conflicts.length > 0 || summary.overLimit || fullStaged.length > 0;
 
   return (
     <Card>
@@ -134,6 +142,7 @@ export function PlanPanel({
                     available={section.availableSeats}
                     total={section.totalCapacity}
                     waitlist={section.waitlistCount}
+                    reserved
                     flash={flashIds.has(section.id)}
                     className="hidden sm:inline-flex"
                   />
@@ -151,6 +160,40 @@ export function PlanPanel({
             })}
           </ul>
         )}
+
+        {sections.length > 0 &&
+          (registered ? (
+            <div className="flex items-center gap-2 rounded-lg bg-accent-soft px-3 py-2.5 text-[13px] font-medium text-accent-fg">
+              <CheckCircle2 className="size-4 shrink-0" aria-hidden /> Registration submitted for {sections.length}{" "}
+              {sections.length === 1 ? "course" : "courses"}.
+            </div>
+          ) : (
+            <div className="space-y-2 border-t border-zinc-100 pt-3">
+              <p className="text-[11px] text-zinc-400">
+                Your picks are held as reservations. Confirm to submit them for registration.
+              </p>
+              <Button
+                variant="primary"
+                size="lg"
+                className="w-full"
+                disabled={blocked || submitting}
+                aria-disabled={blocked || undefined}
+                title={
+                  summary.conflicts.length > 0
+                    ? "Resolve the time conflict first"
+                    : summary.overLimit
+                      ? "You are over the credit limit"
+                      : fullStaged.length > 0
+                        ? "A reserved section is full"
+                        : undefined
+                }
+                onClick={onConfirmRegister}
+              >
+                {submitting ? <Loader2 className="animate-spin" aria-hidden /> : <CheckCircle2 aria-hidden />}
+                {submitting ? "Submitting…" : `Confirm registration · ${sections.length}`}
+              </Button>
+            </div>
+          ))}
       </CardContent>
     </Card>
   );

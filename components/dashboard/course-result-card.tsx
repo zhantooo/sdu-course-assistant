@@ -152,6 +152,7 @@ function SectionRow({
               available={section.availableSeats}
               total={section.totalCapacity}
               waitlist={section.waitlistCount}
+              reserved={staged}
               flash={flashIds.has(section.id)}
             />
             {clash && (

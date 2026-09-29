@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { TimetableGrid } from "@/components/timetable/timetable-grid";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { Course, Department, SeatAvailability, Section, StudentProfile, Transcript } from "@/lib/domain/types";
 import type { CreditLimit } from "@/lib/registration/credits";
 import { evaluateCandidate, summarizeSelection, type SelectionContext } from "@/lib/registration/evaluate";
@@ -53,6 +54,10 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [seedSeats] = useState(() => initialSeats(courses));
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [confirmRegister, setConfirmRegister] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [registered, setRegistered] = useState(false);
 
   // The seat poller calls back asynchronously; read the latest plan through a ref.
   const planRef = useRef<{ staged: ReadonlySet<string>; byId: ReadonlyMap<string, Section> }>({
@@ -128,6 +133,7 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
       const index = stagedIds.indexOf(sectionId);
       setStagedIds((prev) => prev.filter((id) => id !== sectionId));
       setFocusedId((id) => (id === sectionId ? null : id));
+      setRegistered(false);
       if (section) {
         toast(`Removed ${label(section)}`, {
           action: {
@@ -146,6 +152,9 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
     [sectionsById, stagedIds, setStagedIds],
   );
 
+  // Explicit deletes (timetable ✕, plan trash) ask first so nothing is lost by a stray click.
+  const requestRemove = useCallback((sectionId: string) => setPendingRemove(sectionId), []);
+
   const toggle = useCallback(
     (section: Section) => {
       if (stagedSet.has(section.id)) return remove(section.id);
@@ -163,6 +172,7 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
         replaced ? prev.map((id) => (id === replaced.id ? section.id : id)) : [...prev, section.id],
       );
       setFocusedId(section.id);
+      setRegistered(false);
 
       if (result.warnings.length > 0) {
         toast.warning(`${label(section)} added with a time conflict`, { description: result.warnings[0].message });
@@ -186,8 +196,43 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
     [coursesByCode, toggle],
   );
 
+  const submitRegistration = useCallback(async () => {
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/registration/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionIds: selected.map((s) => s.id) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error("Registration failed", { description: data?.error?.message ?? "Please try again." });
+      } else if (data.pending) {
+        setRegistered(true);
+        toast.success("Plan reserved", { description: data.message });
+      } else if (data.committed) {
+        setRegistered(true);
+        toast.success(`Registered for ${selected.length} ${selected.length === 1 ? "course" : "courses"}`);
+      } else {
+        const reasons: string[] = (data.results ?? [])
+          .filter((r: { outcome: string }) => r.outcome === "REJECTED")
+          .map((r: { sectionId: string; message: string }) => {
+            const s = sectionsById.get(r.sectionId);
+            return `${s ? label(s) : r.sectionId}: ${r.message}`;
+          });
+        toast.error("Registration rejected", { description: reasons[0] ?? "None of the sections could be registered." });
+      }
+    } catch {
+      toast.error("Couldn't reach the server.");
+    } finally {
+      setSubmitting(false);
+      setConfirmRegister(false);
+    }
+  }, [selected, sectionsById]);
+
   const preview = previewId ? (sectionsById.get(previewId) ?? null) : null;
   const hasSections = useMemo(() => liveCourses.some((c) => c.sections.length > 0), [liveCourses]);
+  const pendingRemoveSection = pendingRemove ? sectionsById.get(pendingRemove) : null;
 
   return (
     <div className="space-y-6">
@@ -264,7 +309,7 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
               colors={colors}
               focusedId={focusedId}
               onFocus={setFocusedId}
-              onRemove={remove}
+              onRemove={requestRemove}
             />
           </Card>
 
@@ -277,11 +322,37 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
             conflictIds={conflictIds}
             focusedId={focusedId}
             flashIds={flashIds}
+            submitting={submitting}
+            registered={registered}
             onFocus={setFocusedId}
-            onRemove={remove}
+            onRemove={requestRemove}
+            onConfirmRegister={() => setConfirmRegister(true)}
           />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        tone="danger"
+        title={pendingRemoveSection ? `Remove ${label(pendingRemoveSection)}?` : "Remove this course?"}
+        description="It will be taken out of your plan and its reserved seat released."
+        confirmLabel="Remove"
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={() => {
+          if (pendingRemove) remove(pendingRemove);
+          setPendingRemove(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmRegister}
+        title={`Confirm registration for ${selected.length} ${selected.length === 1 ? "course" : "courses"}?`}
+        description="Your reserved sections will be submitted for registration."
+        confirmLabel="Confirm & submit"
+        busy={submitting}
+        onCancel={() => !submitting && setConfirmRegister(false)}
+        onConfirm={submitRegistration}
+      />
     </div>
   );
 }
