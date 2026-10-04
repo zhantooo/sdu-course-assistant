@@ -37,7 +37,12 @@ const envSchema = z
         if (!env[key]) ctx.addIssue({ code: "custom", path: [key], message: "required when SDU_API_MODE=live" });
       }
     }
-    if (env.NODE_ENV === "production" && !env.SESSION_SECRET) {
+    // Required at runtime in production, but NOT during `next build` — the build
+    // prerenders pages (and exports env) before deploy-time secrets are needed,
+    // so gating it on the build phase lets the build pass and surfaces a clear
+    // runtime error instead if the secret is ever missing on the server.
+    const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+    if (env.NODE_ENV === "production" && !isBuildPhase && !env.SESSION_SECRET) {
       ctx.addIssue({ code: "custom", path: ["SESSION_SECRET"], message: "required in production" });
     }
   });
