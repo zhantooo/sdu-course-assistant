@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Loader2, Plus, Sparkles } from "lucide-react";
+import { Check, GraduationCap, Loader2, Plus, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,20 +28,40 @@ interface RecommendationsPanelProps {
 
 export function RecommendationsPanel({ courses, passed, failed, profile, stagedCourseCodes, onAdd }: RecommendationsPanelProps) {
   const { eligible } = useMemo(() => recommendCourses(courses, passed, failed), [courses, passed, failed]);
-  const top = eligible.slice(0, 8);
+  const top = useMemo(() => eligible.slice(0, 8), [eligible]);
+
+  // A balanced term: fill up to the credit limit with the top picks.
+  const suggestedCredits = useMemo(() => {
+    let sum = 0;
+    for (const r of top) {
+      if (sum + r.course.credits > profile.creditLimit) break;
+      sum += r.course.credits;
+    }
+    return sum;
+  }, [top, profile.creditLimit]);
+
+  // Senior students mostly pick electives (300/400-level) for their track —
+  // flag it so the copy can point them at the AI advice.
+  const electiveHeavy = useMemo(
+    () => top.filter((r) => r.course.level >= 300 && !r.retake).length >= 3,
+    [top],
+  );
 
   const [summary, setSummary] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  // Re-request only when the actual candidate set changes; keyed so it also
-  // survives dev StrictMode's double-mount without aborting the live request.
+  // Re-request only when the actual candidate set changes. The ref is the single
+  // source of truth for "which set is live", so results are applied by comparing
+  // against it — this survives dev StrictMode's mount→cleanup→mount without the
+  // in-flight request being orphaned (the old `alive` flag left it stuck loading).
   const candidateKey = top.map((r) => r.course.code).join(",");
   const requestedFor = useRef("");
+  const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!candidateKey || requestedFor.current === candidateKey) return;
     requestedFor.current = candidateKey;
 
-    // Reuse a cached summary for the same candidate set to avoid re-calling the
+    // Reuse a cached rationale for the same candidate set to avoid re-calling the
     // model (and burning quota) on every visit to the planner.
     try {
       const cached = sessionStorage.getItem(`rec:${candidateKey}`);
@@ -54,8 +74,21 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
       // sessionStorage unavailable — just fetch.
     }
 
-    let alive = true;
+    // Supersede any earlier in-flight request for a stale candidate set.
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
+    setSummary(null);
     setStatus("loading");
+
+    // Never leave the banner spinning: if the model is slow or quota is out,
+    // fall back to the ranked list (which is always shown) after a hard cap.
+    const timer = setTimeout(() => {
+      if (requestedFor.current === candidateKey) setStatus("error");
+      controller.abort();
+    }, 15000);
+
     (async () => {
       try {
         const res = await fetch("/api/recommendations", {
@@ -72,10 +105,11 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
             })),
             recentlyPassed: [...passed].slice(0, 60),
           }),
+          signal: controller.signal,
         });
         const data = await res.json().catch(() => ({}));
-        if (!alive) return;
-        if (!res.ok) {
+        if (requestedFor.current !== candidateKey) return; // a newer set took over
+        if (!res.ok || !data.summary) {
           setStatus("error");
         } else {
           setSummary(data.summary as string);
@@ -86,13 +120,14 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
             // best-effort cache only
           }
         }
-      } catch {
-        if (alive) setStatus("error");
+      } catch (err) {
+        // Aborted (timeout or superseded) is handled elsewhere; ignore it here.
+        if ((err as Error)?.name === "AbortError") return;
+        if (requestedFor.current === candidateKey) setStatus("error");
+      } finally {
+        clearTimeout(timer);
       }
     })();
-    return () => {
-      alive = false;
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateKey]);
 
@@ -102,20 +137,48 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Sparkles className="size-4 text-accent" aria-hidden /> Recommended for you
+          <Sparkles className="size-4 text-accent" aria-hidden /> Recommended this semester
         </CardTitle>
         <span className="text-xs text-zinc-400">{eligible.length} eligible</span>
       </CardHeader>
       <CardContent className="space-y-4">
+        <p className="-mt-1 text-[13px] text-zinc-500">
+          Ranked from your transcript — these fit your plan right now.
+          {suggestedCredits > 0 && (
+            <>
+              {" "}
+              A balanced term is about{" "}
+              <span className="tnum font-medium text-zinc-700">
+                {suggestedCredits}/{profile.creditLimit} ECTS
+              </span>
+              . Add any to your plan with the <Plus className="inline size-3 -translate-y-px" aria-hidden /> button.
+            </>
+          )}
+        </p>
+
         <div className="rounded-lg bg-accent-soft/50 p-3.5 text-[13px] leading-relaxed text-zinc-700">
           {status === "loading" && (
             <span className="flex items-center gap-2 text-zinc-500">
-              <Loader2 className="size-3.5 animate-spin" /> Analysing your degree plan…
+              <Loader2 className="size-3.5 animate-spin" aria-hidden /> Analysing your degree plan…
             </span>
           )}
-          {status === "error" && <span className="text-zinc-500">Personalised advice is unavailable right now, but the eligible courses below are ranked for you.</span>}
+          {status === "error" && (
+            <span className="text-zinc-500">
+              Personalised advice is unavailable right now, but the courses below are ranked for you — add the ones you want.
+            </span>
+          )}
           {status === "ready" && summary && <p className="whitespace-pre-wrap">{summary}</p>}
         </div>
+
+        {electiveHeavy && (
+          <p className="flex items-start gap-2 rounded-lg border border-accent/20 bg-accent-soft/40 px-3 py-2 text-[12px] text-accent-fg">
+            <GraduationCap className="mt-px size-3.5 shrink-0" aria-hidden />
+            <span>
+              You&apos;re mostly choosing electives now. Pick along your track — the advice above helps you build a
+              coherent set, or ask the assistant for a second opinion.
+            </span>
+          </p>
+        )}
 
         <ul className="grid gap-2 sm:grid-cols-2">
           {top.map(({ course, reasons, retake }) => {
@@ -145,7 +208,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
                         ? "border-transparent text-accent"
                         : "border-zinc-200 text-zinc-500 hover:border-accent/40 hover:text-accent",
                     )}
-                    aria-label={staged ? `${course.code} in plan` : `Add ${course.code}`}
+                    aria-label={staged ? `${course.code} in plan` : `Add ${course.code} to plan`}
                   >
                     {staged ? <Check className="size-4" /> : <Plus className="size-4" />}
                   </button>

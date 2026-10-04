@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["**/*.test.ts"],
-    exclude: ["node_modules/**", ".next/**"],
+    exclude: ["**/node_modules/**", ".next/**"],
     env: { SDU_MOCK_LATENCY_MS: "0", SDU_MOCK_SEAT_DRIFT: "false" },
   },
 });

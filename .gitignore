@@ -10,3 +10,9 @@ lib/generated/
 __fixtures__/
 AGENTS.md
 CLAUDE.md
+
+# Claude Code local settings (personal)
+.claude/settings.local.json
+
+# local dev server log
+.next-dev.log

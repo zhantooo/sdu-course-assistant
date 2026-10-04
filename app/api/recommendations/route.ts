@@ -36,10 +36,13 @@ export const POST = withSession(async (request) => {
   }
 
   const system = `You are an academic advisor at Suleyman Demirel University. Recommend which of the
-ELIGIBLE courses the student should take next semester, up to their credit limit. Prioritise retakes,
-foundational and prerequisite-unlocking courses, and a balanced load. You may ONLY choose from the
-eligible list — never invent a course. Be concise: 2-3 sentences of overall advice, then a short
-prioritised list "CODE — one-line reason". Answer in the student's likely language (English by default).`;
+ELIGIBLE courses the student should take THIS semester, up to their credit limit. Prioritise retakes,
+foundational and prerequisite-unlocking courses, and a balanced load. When the student is far through
+the degree and the eligible list is mostly 300/400-level, treat those as electives: suggest a coherent
+set that fits one specialisation track rather than a scattered mix, and say which track it leans to.
+You may ONLY choose from the eligible list — never invent a course. Be concise: 2-3 sentences of overall
+advice, then a short prioritised list "CODE — one-line reason". Answer in the student's likely language
+(English by default).`;
 
   const context = [
     `Student: ${profile.fullName}, program ${profile.program}, GPA ${profile.gpa.toFixed(2)}.`,
