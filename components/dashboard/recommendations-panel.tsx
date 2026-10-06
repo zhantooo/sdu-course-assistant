@@ -1,9 +1,9 @@
 "use client";
 
-import { Check, GraduationCap, Loader2, Plus, Sparkles } from "lucide-react";
+import { Check, ChevronDown, GraduationCap, Loader2, Plus, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import type { Course } from "@/lib/domain/types";
 import { recommendCourses } from "@/lib/recommendation/recommend";
 import { cn } from "@/lib/utils";
@@ -49,6 +49,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
 
   const [summary, setSummary] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [collapsed, setCollapsed] = useState(false);
   // Re-request only when the actual candidate set changes. The ref is the single
   // source of truth for "which set is live", so results are applied by comparing
   // against it — this survives dev StrictMode's mount→cleanup→mount without the
@@ -135,12 +136,27 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
+        className={cn(
+          "flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left transition-colors hover:bg-zinc-50",
+          !collapsed && "border-b border-zinc-100",
+        )}
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
           <Sparkles className="size-4 text-accent" aria-hidden /> Recommended this semester
-        </CardTitle>
-        <span className="text-xs text-zinc-400">{eligible.length} eligible</span>
-      </CardHeader>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="text-xs text-zinc-400">{eligible.length} eligible</span>
+          <ChevronDown
+            className={cn("size-4 text-zinc-400 transition-transform", collapsed && "-rotate-90")}
+            aria-hidden
+          />
+        </span>
+      </button>
+      {!collapsed && (
       <CardContent className="space-y-4">
         <p className="-mt-1 text-[13px] text-zinc-500">
           Ranked from your transcript — these fit your plan right now.
@@ -218,6 +234,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
           })}
         </ul>
       </CardContent>
+      )}
     </Card>
   );
 }

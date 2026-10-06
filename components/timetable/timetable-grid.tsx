@@ -107,27 +107,23 @@ export function TimetableGrid({ sections, preview, colors, focusedId, onFocus, o
 
         <div className="relative grid" style={{ ...gridColumns, height: bodyHeight }}>
           <div className="relative" aria-hidden>
-            {hours.map((m) => (
-              <span
-                key={m}
-                className="tnum absolute right-2 -translate-y-1/2 font-mono text-[10px] text-zinc-300 first:translate-y-0.5"
-                style={{ top: ((m - dayStart) / 60) * HOUR_PX }}
-              >
-                {formatClock(m)}
-              </span>
+            {hours.map((m, i) => (
+              <div key={m} className="absolute w-full border-b border-zinc-100" style={{ top: i * HOUR_PX, height: HOUR_PX }}>
+                <span className="tnum absolute top-1 right-2 font-mono text-[10px] text-zinc-400">{formatClock(m)}</span>
+              </div>
             ))}
           </div>
 
           {days.map((day) => (
-            <div
-              key={day}
-              className="relative border-l border-zinc-100"
-              style={{
-                backgroundImage:
-                  "linear-gradient(to bottom, rgb(24 24 27 / 0.07) 1px, transparent 1px), linear-gradient(to bottom, rgb(24 24 27 / 0.035) 1px, transparent 1px)",
-                backgroundSize: `100% ${HOUR_PX}px, 100% ${HOUR_PX / 2}px`,
-              }}
-            >
+            <div key={day} className="relative border-l border-zinc-200">
+              {hours.map((m, i) => (
+                <div
+                  key={m}
+                  aria-hidden
+                  className="absolute w-full border-b border-zinc-100"
+                  style={{ top: i * HOUR_PX, height: HOUR_PX }}
+                />
+              ))}
               {laidOut.get(day)?.map(({ item, lane, lanes }) => (
                 <TimetableBlock
                   key={item.key}
