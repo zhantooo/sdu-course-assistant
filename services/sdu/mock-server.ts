@@ -193,13 +193,21 @@ const handlers: Record<SduEndpointKey, Handler> = {
     const limit = creditLimitFor({ gpa, academicStatus: student.profile.academic_status }).max;
 
     const reasons = new Map<string, [code: string, message: string]>();
+    const alreadyEnrolled = new Set<string>();
     const requested = req.section_ids.map((id) => s.sections.get(id));
     const seenCourses = new Set<string>();
 
     requested.forEach((section, i) => {
       const id = req.section_ids[i];
       if (!section) return reasons.set(id, ["SECTION_NOT_FOUND", "Section does not exist in this term."]);
-      if (enrolled.has(id)) return reasons.set(id, ["ALREADY_ENROLLED", "Already enrolled in this section."]);
+      // Re-submitting a section you already hold is an idempotent no-op, not an
+      // error. The planner sends the whole plan on every confirm, so earlier
+      // enrolments must not fail the atomic batch.
+      if (enrolled.has(id)) {
+        alreadyEnrolled.add(id);
+        seenCourses.add(section.course_code);
+        return;
+      }
       if (seenCourses.has(section.course_code)) {
         return reasons.set(id, ["DUPLICATE_COURSE", "Only one section per course may be submitted."]);
       }
@@ -210,30 +218,38 @@ const handlers: Record<SduEndpointKey, Handler> = {
       }
     });
 
-    const valid = requested.filter((x): x is SduSection => !!x);
+    // Only newly-requested sections are enrolled; already-held ones stay as they are.
+    const newSections = requested.filter(
+      (x, i): x is SduSection => !!x && !alreadyEnrolled.has(req.section_ids[i]) && !reasons.has(req.section_ids[i]),
+    );
     const existing = [...enrolled].map((id) => s.sections.get(id)).filter((x): x is SduSection => !!x);
-    for (const c of findConflicts([...existing, ...valid].map(toSection))) {
+    for (const c of findConflicts([...existing, ...newSections].map(toSection))) {
       for (const id of [c.a.sectionId, c.b.sectionId]) {
-        if (req.section_ids.includes(id) && !reasons.has(id)) {
+        if (req.section_ids.includes(id) && !reasons.has(id) && !alreadyEnrolled.has(id)) {
           reasons.set(id, ["TIME_CONFLICT", `Time conflict with ${c.a.sectionId === id ? c.b.courseCode : c.a.courseCode}.`]);
         }
       }
     }
 
-    const totalCredits = [...existing, ...valid].reduce((sum, x) => sum + x.credits, 0);
+    const totalCredits = [...existing, ...newSections].reduce((sum, x) => sum + x.credits, 0);
     if (totalCredits > limit) {
       for (const id of req.section_ids) {
-        if (!reasons.has(id)) reasons.set(id, ["CREDIT_LIMIT_EXCEEDED", `Batch exceeds the ${limit}-credit limit.`]);
+        if (!reasons.has(id) && !alreadyEnrolled.has(id)) {
+          reasons.set(id, ["CREDIT_LIMIT_EXCEEDED", `Batch exceeds the ${limit}-credit limit.`]);
+        }
       }
     }
 
     const transactionId = `TXN-${Date.now().toString(36).toUpperCase()}`;
+    const enrolledRow = (id: string, message: string) =>
+      ({ section_id: id, status: "ENROLLED", reason_code: null, message }) as const;
     let response: MockResponse;
     if (reasons.size > 0) {
       response = ok({
         transaction_id: transactionId,
         status: "REJECTED",
         results: req.section_ids.map((id) => {
+          if (alreadyEnrolled.has(id)) return enrolledRow(id, "Already enrolled in this section.");
           const [code, message] = reasons.get(id) ?? [
             "BATCH_ABORTED",
             "Not processed: another section in this batch was rejected.",
@@ -242,7 +258,7 @@ const handlers: Record<SduEndpointKey, Handler> = {
         }),
       });
     } else {
-      for (const section of valid) {
+      for (const section of newSections) {
         section.available_seats -= 1;
         // A real enrolment is permanent; keep drift from "refilling" the seat.
         s.baseline.set(section.section_id, (s.baseline.get(section.section_id) ?? 1) - 1);
@@ -252,12 +268,9 @@ const handlers: Record<SduEndpointKey, Handler> = {
       response = ok({
         transaction_id: transactionId,
         status: "COMMITTED",
-        results: req.section_ids.map((id) => ({
-          section_id: id,
-          status: "ENROLLED",
-          reason_code: null,
-          message: "Enrolled.",
-        })),
+        results: req.section_ids.map((id) =>
+          enrolledRow(id, alreadyEnrolled.has(id) ? "Already enrolled in this section." : "Enrolled."),
+        ),
       });
     }
     s.idempotency.set(key, response);
