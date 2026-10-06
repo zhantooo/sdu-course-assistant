@@ -16,3 +16,7 @@ CLAUDE.md
 
 # local dev server log
 .next-dev.log
+
+# OS + local logs
+.DS_Store
+*.log
