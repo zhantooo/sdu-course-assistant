@@ -50,6 +50,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
   const [summary, setSummary] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [collapsed, setCollapsed] = useState(false);
+  const [picksCollapsed, setPicksCollapsed] = useState(false);
   // Re-request only when the actual candidate set changes. The ref is the single
   // source of truth for "which set is live", so results are applied by comparing
   // against it — this survives dev StrictMode's mount→cleanup→mount without the
@@ -132,6 +133,25 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateKey]);
 
+  // The courses the AI actually named in its advice — surfaced as one-tap cards
+  // right under the recommendation, so a suggestion can be added without re-reading
+  // the prose. Resolved against the live catalog; already-passed ones are dropped.
+  const aiPicks = useMemo(() => {
+    if (status !== "ready" || !summary) return [];
+    const byNorm = new Map(courses.map((c) => [c.code.replace(/\s+/g, "").toUpperCase(), c]));
+    const seen = new Set<string>();
+    const out: Course[] = [];
+    for (const raw of summary.match(/\b[A-Z]{2,4}\s?\d{3}\b/g) ?? []) {
+      const key = raw.replace(/\s+/g, "").toUpperCase();
+      const course = byNorm.get(key);
+      if (course && !passed.has(course.code) && !seen.has(key)) {
+        seen.add(key);
+        out.push(course);
+      }
+    }
+    return out;
+  }, [status, summary, courses, passed]);
+
   if (top.length === 0) return null;
 
   return (
@@ -186,6 +206,61 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
           {status === "ready" && summary && <p className="whitespace-pre-wrap">{summary}</p>}
         </div>
 
+        {aiPicks.length > 0 && (
+          <div className="overflow-hidden rounded-xl border border-zinc-200">
+            <button
+              type="button"
+              onClick={() => setPicksCollapsed((v) => !v)}
+              aria-expanded={!picksCollapsed}
+              className="flex w-full items-center gap-2 bg-accent-soft/40 px-3 py-2 text-left transition-colors hover:bg-accent-soft/60"
+            >
+              <Sparkles className="size-3.5 shrink-0 text-accent" aria-hidden />
+              <span className="text-[12px] font-medium text-zinc-700">AI picks · this semester</span>
+              <span className="tnum ml-auto rounded-full bg-white px-1.5 text-[10px] font-semibold text-zinc-500">
+                {aiPicks.length}
+              </span>
+              <ChevronDown
+                className={cn("size-3.5 shrink-0 text-zinc-400 transition-transform", picksCollapsed && "-rotate-90")}
+                aria-hidden
+              />
+            </button>
+            {!picksCollapsed && (
+              <ul className="divide-y divide-zinc-100">
+                {aiPicks.map((course) => {
+                  const staged = stagedCourseCodes.has(course.code);
+                  return (
+                    <li key={course.code} className="flex items-center gap-2 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="tnum font-mono text-[12px] font-semibold text-zinc-900">{course.code}</span>
+                          <span className="tnum text-[10px] text-zinc-400">{course.credits} ECTS</span>
+                        </div>
+                        <p className="truncate text-[11px] text-zinc-500">{course.title}</p>
+                      </div>
+                      {onAdd && course.sections.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onAdd(course)}
+                          disabled={staged}
+                          aria-label={staged ? `${course.code} in plan` : `Add ${course.code} to plan`}
+                          className={cn(
+                            "grid size-7 shrink-0 place-items-center rounded-lg border transition-colors",
+                            staged
+                              ? "border-transparent text-emerald-600"
+                              : "border-zinc-200 text-zinc-500 hover:border-accent/40 hover:text-accent",
+                          )}
+                        >
+                          {staged ? <Check className="size-4" /> : <Plus className="size-4" />}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+
         {electiveHeavy && (
           <p className="flex items-start gap-2 rounded-lg border border-accent/20 bg-accent-soft/40 px-3 py-2 text-[12px] text-accent-fg">
             <GraduationCap className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -196,6 +271,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
           </p>
         )}
 
+        {aiPicks.length === 0 && (
         <ul className="grid gap-2 sm:grid-cols-2">
           {top.map(({ course, reasons, retake }) => {
             const staged = stagedCourseCodes.has(course.code);
@@ -233,6 +309,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
             );
           })}
         </ul>
+        )}
       </CardContent>
       )}
     </Card>
