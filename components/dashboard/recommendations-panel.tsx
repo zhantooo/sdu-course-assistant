@@ -51,6 +51,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [collapsed, setCollapsed] = useState(false);
   const [picksCollapsed, setPicksCollapsed] = useState(false);
+  const [coursesCollapsed, setCoursesCollapsed] = useState(false);
   // Re-request only when the actual candidate set changes. The ref is the single
   // source of truth for "which set is live", so results are applied by comparing
   // against it — this survives dev StrictMode's mount→cleanup→mount without the
@@ -271,8 +272,24 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
           </p>
         )}
 
-        {aiPicks.length === 0 && (
-        <ul className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <button
+            type="button"
+            onClick={() => setCoursesCollapsed((v) => !v)}
+            aria-expanded={!coursesCollapsed}
+            className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left"
+          >
+            <span className="text-[12px] font-semibold text-zinc-700">Courses this semester</span>
+            <span className="tnum ml-auto rounded-full bg-zinc-100 px-1.5 text-[10px] font-semibold text-zinc-500">
+              {eligible.length}
+            </span>
+            <ChevronDown
+              className={cn("size-3.5 shrink-0 text-zinc-400 transition-transform", coursesCollapsed && "-rotate-90")}
+              aria-hidden
+            />
+          </button>
+          {!coursesCollapsed && (
+          <ul className="mt-2 grid gap-2 sm:grid-cols-2">
           {top.map(({ course, reasons, retake }) => {
             const staged = stagedCourseCodes.has(course.code);
             return (
@@ -308,8 +325,9 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
               </li>
             );
           })}
-        </ul>
-        )}
+          </ul>
+          )}
+        </div>
       </CardContent>
       )}
     </Card>
