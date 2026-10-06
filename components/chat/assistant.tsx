@@ -2,6 +2,7 @@
 
 import { Bot, Check, ChevronDown, Loader2, Plus, Send, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useHasChatted } from "@/components/dashboard/use-has-chatted";
 import { useStagedSections } from "@/components/dashboard/use-staged-sections";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +40,7 @@ export function Assistant({ studentId, termCode }: { studentId: string; termCode
 
   const { stagedIds, setStagedIds } = useStagedSections(`sdu:plan:${studentId}:${termCode}`);
   const stagedSet = useMemo(() => new Set(stagedIds), [stagedIds]);
+  const [, markChatted] = useHasChatted();
 
   // Load the catalog once the panel opens, so named courses become addable.
   useEffect(() => {
@@ -118,6 +120,7 @@ export function Assistant({ studentId, termCode }: { studentId: string; termCode
         setError(data?.error?.message ?? "The assistant is unavailable.");
       } else {
         setMessages((m) => [...m, { role: "assistant", text: data.reply as string }]);
+        markChatted();
       }
     } catch {
       setError("Couldn't reach the assistant.");

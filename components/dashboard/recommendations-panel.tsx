@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Course } from "@/lib/domain/types";
 import { recommendCourses } from "@/lib/recommendation/recommend";
+import { useHasChatted } from "./use-has-chatted";
 import { cn } from "@/lib/utils";
 
 export interface RecProfile {
@@ -52,6 +53,9 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
   const [collapsed, setCollapsed] = useState(false);
   const [picksCollapsed, setPicksCollapsed] = useState(false);
   const [coursesCollapsed, setCoursesCollapsed] = useState(false);
+  // The AI-picks block only surfaces once the student has actually asked the
+  // assistant — showing it on first load would be a recommendation nobody requested.
+  const [hasChatted] = useHasChatted();
   // Re-request only when the actual candidate set changes. The ref is the single
   // source of truth for "which set is live", so results are applied by comparing
   // against it — this survives dev StrictMode's mount→cleanup→mount without the
@@ -207,7 +211,7 @@ export function RecommendationsPanel({ courses, passed, failed, profile, stagedC
           {status === "ready" && summary && <p className="whitespace-pre-wrap">{summary}</p>}
         </div>
 
-        {aiPicks.length > 0 && (
+        {hasChatted && aiPicks.length > 0 && (
           <div className="overflow-hidden rounded-xl border border-zinc-200">
             <button
               type="button"
