@@ -16,7 +16,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         mockMode={env.SDU_API_MODE === "mock"}
       />
       <main className="mx-auto max-w-[1600px] px-4 py-6">{children}</main>
-      {isGeminiConfigured() && <Assistant />}
+      {isGeminiConfigured() && <Assistant studentId={session.studentId} termCode={env.SDU_CURRENT_TERM} />}
     </>
   );
 }

@@ -50,14 +50,48 @@ function initialSeats(courses: Course[]): Record<string, SeatAvailability> {
  * counts, and every rule evaluation the sidebar, grid and plan panel render.
  */
 export function RegistrationWorkspace({ profile, transcript, courses, departments, term, creditLimit }: RegistrationWorkspaceProps) {
-  const { stagedIds, setStagedIds } = useStagedSections(`sdu:plan:${profile.studentId}:${term.code}`);
+  const { stagedIds, setStagedIds, hydrated: planHydrated } = useStagedSections(`sdu:plan:${profile.studentId}:${term.code}`);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [seedSeats] = useState(() => initialSeats(courses));
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [confirmRegister, setConfirmRegister] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [registered, setRegistered] = useState(false);
+
+  // "Registered" is persisted per student + term so a confirmed plan still reads
+  // as submitted after a refresh (it resets whenever the plan is edited below).
+  const registeredKey = `sdu:registered:${profile.studentId}:${term.code}`;
+  const [registered, setRegisteredState] = useState(false);
+  useEffect(() => {
+    try {
+      setRegisteredState(window.localStorage.getItem(registeredKey) === "1");
+    } catch {
+      // storage unavailable — treat as not yet registered
+    }
+  }, [registeredKey]);
+  const setRegistered = useCallback(
+    (value: boolean) => {
+      setRegisteredState(value);
+      try {
+        window.localStorage.setItem(registeredKey, value ? "1" : "0");
+      } catch {
+        // non-fatal: still reflected for this session
+      }
+    },
+    [registeredKey],
+  );
+
+  // Any edit to the plan un-confirms it — including one made outside this
+  // component (the AI assistant adds courses straight to the shared plan). The
+  // first settled value after hydration is the baseline, so a reload of an
+  // already-submitted plan is not treated as an edit.
+  const planBaseline = useRef<string | null>(null);
+  useEffect(() => {
+    if (!planHydrated) return;
+    const signature = [...stagedIds].sort().join(",");
+    if (planBaseline.current !== null && planBaseline.current !== signature) setRegistered(false);
+    planBaseline.current = signature;
+  }, [stagedIds, planHydrated, setRegistered]);
 
   // The seat poller calls back asynchronously; read the latest plan through a ref.
   const planRef = useRef<{ staged: ReadonlySet<string>; byId: ReadonlyMap<string, Section> }>({
