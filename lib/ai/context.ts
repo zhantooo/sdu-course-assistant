@@ -4,7 +4,7 @@
  * return whatever is known, rather than failing the chat.
  */
 import { getSisClient } from "@/lib/auth/sis-store";
-import { getSduApi } from "@/services/sduApi";
+import { getStudentSnapshot, getTermCatalog } from "@/lib/data/queries";
 import { getEnv } from "@/lib/env";
 
 export async function buildStudentContext(studentId: string): Promise<string> {
@@ -34,13 +34,11 @@ export async function buildStudentContext(studentId: string): Promise<string> {
         lines.push(`Courses available to take now: ${available.map((c) => `${c.code} ${c.title}`).join("; ")}.`);
       }
     } else {
-      // Demo / mock mode.
-      const sdu = getSduApi();
+      // Demo mode — the app's own database (or the mock when no DB is configured).
       const term = getEnv().SDU_CURRENT_TERM;
-      const [profile, transcript, courses] = await Promise.all([
-        sdu.getStudentProfile(studentId),
-        sdu.getTranscript(studentId),
-        sdu.getCatalog(term),
+      const [{ profile, transcript }, { courses }] = await Promise.all([
+        getStudentSnapshot(studentId),
+        getTermCatalog(term),
       ]);
       lines.push(`Student: ${profile.fullName} (${profile.studentId}), program: ${profile.program.name}, GPA ${profile.gpa.toFixed(2)}.`);
       const passed = transcript.entries.filter((e) => e.status === "PASSED");

@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { jsonError, withSession } from "@/lib/api/http";
 import { searchCatalog } from "@/lib/catalog/search";
+import { getTermCatalog } from "@/lib/data/queries";
 import { WEEKDAYS } from "@/lib/domain/types";
 import { getEnv } from "@/lib/env";
-import { getSduApi } from "@/services/sduApi";
 
 const querySchema = z.object({
   q: z.string().max(100).default(""),
@@ -32,7 +32,7 @@ export const GET = withSession(async (request) => {
 
   const { q, department, instructor, days, time, open } = parsed.data;
   const termCode = getEnv().SDU_CURRENT_TERM;
-  const courses = await getSduApi().getCatalog(termCode);
+  const { courses } = await getTermCatalog(termCode);
   const results = searchCatalog(courses, {
     query: q,
     department: department ?? null,

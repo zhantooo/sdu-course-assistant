@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
 import { withSession } from "@/lib/api/http";
-import { getSduApi } from "@/services/sduApi";
+import { getStudentSnapshot } from "@/lib/data/queries";
 
-/** GET /api/me — fresh profile + transcript from SDU for the signed-in student. */
+/** GET /api/me — the signed-in student's profile + transcript (from the DB, else mock). */
 export const GET = withSession(async (_request, session) => {
-  const sdu = getSduApi();
-  const [profile, transcript] = await Promise.all([
-    sdu.getStudentProfile(session.studentId),
-    sdu.getTranscript(session.studentId),
-  ]);
+  const { profile, transcript } = await getStudentSnapshot(session.studentId);
   return NextResponse.json({ profile, transcript });
 });

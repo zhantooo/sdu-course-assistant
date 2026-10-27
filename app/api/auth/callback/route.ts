@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { appOrigin } from "@/lib/api/http";
 import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/token";
+import { dbGetSnapshot, isDbEnabled } from "@/lib/data/db-source";
 import { getSduApi, isSduApiError } from "@/services/sduApi";
 
 /**
@@ -21,7 +22,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const { studentId } = await sdu.validateServiceTicket(ticket, serviceUrl);
-    const profile = await sdu.getStudentProfile(studentId);
+    const profile = isDbEnabled() ? (await dbGetSnapshot(studentId))?.profile : await sdu.getStudentProfile(studentId);
+    if (!profile) return fail("invalid_credentials");
     if (profile.academicStatus === "SUSPENDED" || profile.academicStatus === "GRADUATED") {
       return fail("not_eligible");
     }

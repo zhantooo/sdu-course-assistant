@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { closeSession, getSisClient } from "@/lib/auth/sis-store";
+import { dbGetCatalog, dbGetSnapshot, isDbEnabled } from "@/lib/data/db-source";
 import { isSisSessionExpired } from "@/services/sdu/sis/client";
 import { curriculumToCatalog } from "@/services/sdu/sis/map";
 import { getSduApi } from "@/services/sduApi";
@@ -34,6 +35,10 @@ export const getStudentSnapshot = cache(async (studentId: string) => {
       onSisError(studentId, error);
     }
   }
+  if (isDbEnabled()) {
+    const snapshot = await dbGetSnapshot(studentId);
+    if (snapshot) return snapshot;
+  }
   const sdu = getSduApi();
   const [profile, transcript] = await Promise.all([sdu.getStudentProfile(studentId), sdu.getTranscript(studentId)]);
   return { profile, transcript };
@@ -48,6 +53,7 @@ export const getTermCatalog = cache(async (termCode: string, studentId?: string)
       onSisError(studentId, error);
     }
   }
+  if (isDbEnabled()) return dbGetCatalog(termCode);
   const sdu = getSduApi();
   const [courses, departments] = await Promise.all([sdu.getCatalog(termCode), sdu.getDepartments()]);
   return { courses, departments };
