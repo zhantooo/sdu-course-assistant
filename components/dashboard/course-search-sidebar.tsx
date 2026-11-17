@@ -18,7 +18,9 @@ interface CourseSearchSidebarProps {
   stagedIds: ReadonlySet<string>;
   flashIds: ReadonlySet<string>;
   evaluate: (section: Section) => CandidateEvaluation;
+  suggestAlternative: (section: Section) => Section | null;
   onToggle: (section: Section) => void;
+  onWaitlist: (section: Section) => void;
   onPreview: (sectionId: string | null) => void;
 }
 
@@ -126,7 +128,9 @@ export function CourseSearchSidebar(props: CourseSearchSidebarProps) {
               stagedIds={props.stagedIds}
               flashIds={props.flashIds}
               evaluate={props.evaluate}
+              suggestAlternative={props.suggestAlternative}
               onToggle={props.onToggle}
+              onWaitlist={props.onWaitlist}
               onPreview={props.onPreview}
             />
           ))

@@ -38,7 +38,7 @@ describe("SduApiClient (mock transport)", () => {
   it("groups catalog sections by course", async () => {
     const courses = await newClient().getCatalog(TERM);
     const dsa = courses.find((c) => c.code === "CSS 225")!;
-    expect(dsa.sections.map((s) => s.sectionNumber)).toEqual(["01", "02"]);
+    expect(dsa.sections.map((s) => s.sectionNumber)).toEqual(["01", "02", "03", "04"]);
     expect(dsa.prerequisites).toEqual([["CSS 106"], ["MAT 151"]]);
     expect(dsa.sections[0].meetings[0]).toMatchObject({ day: "TUE", start: 600, end: 710 });
   });

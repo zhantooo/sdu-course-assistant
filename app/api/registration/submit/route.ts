@@ -25,18 +25,22 @@ async function mirrorRegistrationToDb(sduStudentId: string, result: BatchSubmitR
     const student = await db.student.findUnique({ where: { sduStudentId }, select: { id: true } });
     if (!student) return;
     for (const sduSectionId of sduSectionIds) {
-      const section = await db.section.findUnique({ where: { sduSectionId }, select: { id: true } });
+      const section = await db.section.findUnique({
+        where: { sduSectionId },
+        select: { id: true, sectionNumber: true, course: { select: { code: true } } },
+      });
       if (!section) continue;
       const existing = await db.enrollment.findUnique({
         where: { studentId_sectionId: { studentId: student.id, sectionId: section.id } },
         select: { status: true },
       });
       if (existing?.status === "ENROLLED") continue; // already counted — stay idempotent
+      const label = `${section.course.code} §${section.sectionNumber}`;
       await db.$transaction([
         db.enrollment.upsert({
           where: { studentId_sectionId: { studentId: student.id, sectionId: section.id } },
-          create: { studentId: student.id, sectionId: section.id, status: "ENROLLED" },
-          update: { status: "ENROLLED", droppedAt: null },
+          create: { studentId: student.id, sectionId: section.id, status: "ENROLLED", studentNo: sduStudentId, course: label },
+          update: { status: "ENROLLED", droppedAt: null, studentNo: sduStudentId, course: label },
         }),
         db.section.update({
           where: { id: section.id },

@@ -88,6 +88,29 @@ export function evaluateCandidate(section: Section, ctx: SelectionContext): Cand
   return { blockers, warnings, replaces, conflicts };
 }
 
+/**
+ * Smart alternative: when a section is full or clashes with the plan, find the
+ * best OTHER section of the same course that would stage cleanly — an open seat
+ * and no time conflict against the rest of the current selection. Ranking:
+ * earliest start, then most open seats, then section number. Null if none fits.
+ */
+export function suggestAlternativeSection(section: Section, ctx: SelectionContext): Section | null {
+  const course = ctx.coursesByCode.get(section.courseCode);
+  if (!course) return null;
+  // Compare against everything except other sections of this same course (a swap).
+  const others = ctx.selected.filter((s) => s.courseCode !== section.courseCode);
+  const staged = new Set(ctx.selected.map((s) => s.id));
+  const candidates = course.sections.filter(
+    (s) => s.id !== section.id && !staged.has(s.id) && s.availableSeats > 0 && conflictsWith(s, others).length === 0,
+  );
+  if (candidates.length === 0) return null;
+
+  const firstStart = (s: Section) => s.meetings.reduce((min, m) => Math.min(min, m.start), Infinity);
+  return [...candidates].sort(
+    (a, b) => firstStart(a) - firstStart(b) || b.availableSeats - a.availableSeats || a.sectionNumber.localeCompare(b.sectionNumber),
+  )[0];
+}
+
 /** With a perspective section: "Overlaps X on …"; without: "X and Y overlap on …". */
 export function describeConflict(conflict: ScheduleConflict, perspectiveSectionId?: string): string {
   const when = `${WEEKDAY_LABELS[conflict.day].long} ${formatClock(conflict.overlapStart)}–${formatClock(conflict.overlapEnd)}`;

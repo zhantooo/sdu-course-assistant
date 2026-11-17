@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Meter } from "@/components/ui/meter";
 import type { StudentProfile } from "@/lib/domain/types";
-import { CREDIT_POLICY } from "@/lib/registration/credits";
+import { assessLoad, CREDIT_POLICY, type CreditLimit, type LoadLevel } from "@/lib/registration/credits";
 import type { SelectionSummary } from "@/lib/registration/evaluate";
 import { cn } from "@/lib/utils";
 import type { SeatSyncStatus } from "./use-live-seats";
@@ -13,9 +13,18 @@ import type { SeatSyncStatus } from "./use-live-seats";
 interface StatStripProps {
   profile: StudentProfile;
   summary: SelectionSummary;
+  creditLimit: CreditLimit;
   seatStatus: SeatSyncStatus;
   seatsUpdatedAt: number | null;
 }
+
+const LOAD_TONE: Record<LoadLevel, string> = {
+  empty: "text-zinc-400",
+  light: "text-zinc-500",
+  balanced: "text-accent",
+  heavy: "text-amber-600",
+  over: "text-red-600",
+};
 
 function Tile({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
@@ -26,9 +35,10 @@ function Tile({ label, children, className }: { label: string; children: React.R
   );
 }
 
-export function StatStrip({ profile, summary, seatStatus, seatsUpdatedAt }: StatStripProps) {
+export function StatStrip({ profile, summary, creditLimit, seatStatus, seatsUpdatedAt }: StatStripProps) {
   const progress = profile.completedCredits / profile.requiredCredits;
   const conflicts = summary.conflicts.length;
+  const load = assessLoad(summary.credits, creditLimit);
 
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -66,11 +76,8 @@ export function StatStrip({ profile, summary, seatStatus, seatsUpdatedAt }: Stat
           <span className="text-sm font-normal text-zinc-400"> / {summary.creditLimit}</span>
         </p>
         <Meter className="mt-2.5" value={summary.credits} max={summary.creditLimit} label="Term credit load" />
-        <p className="mt-2 text-xs text-zinc-500">
-          {summary.creditLimit - summary.credits >= 0
-            ? `${summary.creditLimit - summary.credits} ECTS of headroom`
-            : `${summary.credits - summary.creditLimit} over the limit`}
-        </p>
+        <p className={cn("mt-2 text-xs font-medium", LOAD_TONE[load.level])}>{load.message}</p>
+        <p className="mt-0.5 text-[11px] text-zinc-400">{creditLimit.recommendedReason}</p>
       </Tile>
 
       <Tile label="Schedule" className={cn(conflicts > 0 && "border-red-200 bg-red-50/50")}>

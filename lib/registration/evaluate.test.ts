@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Course, Section } from "@/lib/domain/types";
-import { evaluateCandidate } from "./evaluate";
+import { evaluateCandidate, suggestAlternativeSection } from "./evaluate";
 import { describeRule, evaluatePrerequisites } from "./prerequisites";
 
 describe("evaluatePrerequisites", () => {
@@ -91,5 +91,35 @@ describe("evaluateCandidate", () => {
     expect(full.blockers.map((b) => b.code)).toEqual(["SECTION_FULL"]);
     const done = evaluateCandidate(mk("s-225-01", "CSS 225", "MON", 600), { ...base, creditLimit: 30, selected: [] });
     expect(done.blockers.map((b) => b.code)).toContain("ALREADY_PASSED");
+  });
+});
+
+describe("suggestAlternativeSection", () => {
+  const s01 = mk("s-311-01", "CSS 311", "MON", 600, 0); // full
+  const s02 = mk("s-311-02", "CSS 311", "TUE", 600, 5); // open, no clash
+  const s03 = mk("s-311-03", "CSS 311", "MON", 600, 5); // open, but clashes below
+  const css311 = { ...course("CSS 311", 6), sections: [s01, s02, s03] };
+  const clasher = mk("s-342", "CSS 342", "MON", 600, 10); // clashes with s03's MON slot
+
+  it("suggests an open, conflict-free alternative of the same course", () => {
+    const ctx = {
+      coursesByCode: new Map([[css311.code, css311]]),
+      passed: new Set<string>(),
+      creditLimit: 30,
+      selected: [clasher],
+    };
+    const alt = suggestAlternativeSection(s01, ctx);
+    expect(alt?.id).toBe("s-311-02"); // s03 clashes, s02 is free
+  });
+
+  it("returns null when no section fits", () => {
+    const onlyFull = { ...course("CSS 311", 6), sections: [s01] };
+    const ctx = {
+      coursesByCode: new Map([[onlyFull.code, onlyFull]]),
+      passed: new Set<string>(),
+      creditLimit: 30,
+      selected: [],
+    };
+    expect(suggestAlternativeSection(s01, ctx)).toBeNull();
   });
 });

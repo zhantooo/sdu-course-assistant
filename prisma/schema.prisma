@@ -356,6 +356,10 @@ model StagedSelection {
   studentId String
   sectionId String
   termId    String
+  /// Denormalised, human-readable labels so the cart is legible in the DB
+  /// viewer at a glance (e.g. "240105044" and "CSS 225 §01").
+  studentNo String   @default("")
+  course    String   @default("")
   createdAt DateTime @default(now())
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
@@ -396,6 +400,10 @@ model Enrollment {
   sectionId  String
   status     EnrollmentStatus @default(ENROLLED)
   batchId    String?
+  /// Denormalised, human-readable labels for the DB viewer (e.g. "240105044",
+  /// "CSS 225 §01"). Set when the enrolment is written.
+  studentNo  String           @default("")
+  course     String           @default("")
   enrolledAt DateTime         @default(now())
   droppedAt  DateTime?
 
@@ -417,6 +425,9 @@ model WaitlistEntry {
   position       Int
   status         WaitlistStatus @default(ACTIVE)
   autoEnroll     Boolean        @default(true)
+  /// Denormalised, human-readable labels for the DB viewer.
+  studentNo      String         @default("")
+  course         String         @default("")
   offeredAt      DateTime?
   offerExpiresAt DateTime?
   createdAt      DateTime       @default(now())

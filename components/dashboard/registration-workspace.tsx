@@ -1,14 +1,16 @@
 "use client";
 
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, Hourglass, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { TimetableGrid } from "@/components/timetable/timetable-grid";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { Course, Department, SeatAvailability, Section, StudentProfile, Transcript } from "@/lib/domain/types";
 import type { CreditLimit } from "@/lib/registration/credits";
-import { evaluateCandidate, summarizeSelection, type SelectionContext } from "@/lib/registration/evaluate";
+import { evaluateCandidate, suggestAlternativeSection, summarizeSelection, type SelectionContext } from "@/lib/registration/evaluate";
+import { optimizeSchedule } from "@/lib/registration/optimize";
 import { passedCourseCodes } from "@/lib/registration/prerequisites";
 import { conflictingSectionIds } from "@/lib/registration/schedule";
 import { assignCourseColors } from "./course-colors";
@@ -57,6 +59,14 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [confirmRegister, setConfirmRegister] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [waitlist, setWaitlist] = useState<Array<{ sectionId: string; position: number; course: string }>>([]);
+  const hasWaitlistRef = useRef(false);
+  // Sections just claimed from the waitlist — the seat poller must not warn that
+  // they "filled up" (the student is the one who just took the seat).
+  const justEnrolledRef = useRef<Set<string>>(new Set());
+  // joinWaitlist is defined further down (it needs processWaitlist); toggle calls
+  // it through this ref so the two don't have to be declared in dependency order.
+  const joinWaitlistRef = useRef<(section: Section) => void>(() => {});
 
   // "Registered" is persisted per student + term so a confirmed plan still reads
   // as submitted after a refresh (it resets whenever the plan is edited below).
@@ -93,6 +103,26 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
     planBaseline.current = signature;
   }, [stagedIds, planHydrated, setRegistered]);
 
+  // Mirror the cart into the database (staged_selections) so the plan is visible
+  // there, not only in the browser. Debounced and best-effort — a failure here
+  // never blocks planning.
+  useEffect(() => {
+    if (!planHydrated) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch("/api/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionIds: stagedIds }),
+        signal: controller.signal,
+      }).catch(() => {});
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [stagedIds, planHydrated]);
+
   // The seat poller calls back asynchronously; read the latest plan through a ref.
   const planRef = useRef<{ staged: ReadonlySet<string>; byId: ReadonlyMap<string, Section> }>({
     staged: new Set(),
@@ -102,6 +132,7 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
     for (const { sectionId, previous, next } of changes) {
       const section = planRef.current.byId.get(sectionId);
       if (!section || !planRef.current.staged.has(sectionId) || !previous) continue;
+      if (justEnrolledRef.current.has(sectionId)) continue; // we just claimed this seat
       if (previous.availableSeats > 0 && next.availableSeats === 0) {
         toast.error(`${label(section)} just filled up`, {
           description: "It stays in your plan, but you'll need another section or the waitlist.",
@@ -160,6 +191,7 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
   const conflictIds = useMemo(() => conflictingSectionIds(summary.conflicts), [summary.conflicts]);
   const colors = useMemo(() => assignCourseColors(selected.map((s) => s.courseCode)), [selected]);
   const evaluate = useCallback((section: Section) => evaluateCandidate(section, ctx), [ctx]);
+  const suggestAlt = useCallback((section: Section) => suggestAlternativeSection(section, ctx), [ctx]);
 
   const remove = useCallback(
     (sectionId: string) => {
@@ -195,8 +227,17 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
 
       const result = evaluateCandidate(section, ctx);
       if (result.blockers.length > 0) {
+        // Smart help: a full section offers its best open, conflict-free sibling
+        // (or the waitlist if none fits).
+        const onlyFull = result.blockers.length === 1 && result.blockers[0].code === "SECTION_FULL";
+        const alt = onlyFull ? suggestAlternativeSection(section, ctx) : null;
         toast.error(`Can't add ${label(section)}`, {
           description: result.blockers.map((b) => b.message).join(" "),
+          action: alt
+            ? { label: `Add §${alt.sectionNumber} instead`, onClick: () => toggle(alt) }
+            : onlyFull
+              ? { label: "Join waitlist", onClick: () => joinWaitlistRef.current(section) }
+              : undefined,
         });
         return;
       }
@@ -207,9 +248,21 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
       );
       setFocusedId(section.id);
       setRegistered(false);
+      // Taking any section of this course clears its waitlist — the server does
+      // the same in /api/plan; this just updates the panel immediately.
+      setWaitlist((prev) => {
+        const next = prev.filter((w) => w.course.split(" §")[0] !== section.courseCode);
+        if (next.length !== prev.length) hasWaitlistRef.current = next.length > 0;
+        return next;
+      });
 
       if (result.warnings.length > 0) {
-        toast.warning(`${label(section)} added with a time conflict`, { description: result.warnings[0].message });
+        // Added with a clash — offer the best clash-free section of the same course.
+        const alt = suggestAlternativeSection(section, ctx);
+        toast.warning(`${label(section)} added with a time conflict`, {
+          description: result.warnings[0].message,
+          action: alt ? { label: `Switch to §${alt.sectionNumber}`, onClick: () => toggle(alt) } : undefined,
+        });
       } else if (replaced) {
         toast.success(`Switched ${section.courseCode} to §${section.sectionNumber}`, {
           description: `Replaced §${replaced.sectionNumber}.`,
@@ -229,6 +282,115 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
     },
     [coursesByCode, toggle],
   );
+
+  // Smart Schedule Optimizer: auto-fill the plan with the best conflict-free,
+  // prerequisite-aware set of courses that fits the student's advised load.
+  const optimize = useCallback(() => {
+    const result = optimizeSchedule({
+      courses: liveCourses,
+      passed,
+      failed,
+      creditLimit: creditLimit.max,
+      target: creditLimit.recommended,
+      preselected: selected,
+    });
+    if (result.added.length === 0) {
+      toast("Your schedule is already optimal", {
+        description: "No conflict-free course fits your remaining credit budget.",
+      });
+      return;
+    }
+    const addedIds = result.added.map((s) => s.id);
+    setStagedIds((prev) => [...prev, ...addedIds.filter((id) => !prev.includes(id))]);
+    setFocusedId(addedIds[0] ?? null);
+    setRegistered(false);
+    const n = result.added.length;
+    toast.success(`Optimized · added ${n} ${n === 1 ? "course" : "courses"} (${result.credits} ECTS total)`, {
+      description: "A conflict-free, balanced plan within your advised load.",
+    });
+  }, [liveCourses, passed, failed, creditLimit.max, creditLimit.recommended, selected, setStagedIds, setRegistered]);
+
+  // ── Smart waitlist ──────────────────────────────────────────────────────
+  // Ask the server to claim any freed seats we're waitlisted for that still fit
+  // the schedule, and refresh the list of what we're still waiting on.
+  const processWaitlist = useCallback(async () => {
+    try {
+      const res = await fetch("/api/waitlist/process", { method: "POST" });
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => null)) as {
+        enrolled: Array<{ sectionId: string; course: string }>;
+        entries: Array<{ sectionId: string; position: number; course: string }>;
+      } | null;
+      if (!data) return;
+      setWaitlist(data.entries ?? []);
+      hasWaitlistRef.current = (data.entries?.length ?? 0) > 0;
+      if (data.enrolled?.length) {
+        const ids = data.enrolled.map((e) => e.sectionId);
+        // Taking the last seat would otherwise trip the "filled up" warning below.
+        ids.forEach((id) => justEnrolledRef.current.add(id));
+        setTimeout(() => ids.forEach((id) => justEnrolledRef.current.delete(id)), 20_000);
+        setStagedIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+        toast.success(`Auto-enrolled from the waitlist: ${data.enrolled.map((e) => e.course).join(", ")}`, {
+          description: "A seat opened and it still fit your schedule, so we claimed it for you.",
+        });
+      }
+    } catch {
+      // best-effort — the waitlist never blocks the UI
+    }
+  }, [setStagedIds]);
+
+  const joinWaitlist = useCallback(
+    async (section: Section) => {
+      try {
+        const res = await fetch("/api/waitlist/join", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sectionId: section.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          toast.error("Couldn't join the waitlist", { description: data?.error?.message ?? "Please try again." });
+          return;
+        }
+        toast.success(`On the waitlist · ${data.course}`, {
+          description: `Position ${data.position}. We'll auto-enroll you when a seat opens and it fits.`,
+        });
+        hasWaitlistRef.current = true;
+        processWaitlist();
+      } catch {
+        toast.error("Couldn't reach the server.");
+      }
+    },
+    [processWaitlist],
+  );
+  joinWaitlistRef.current = joinWaitlist;
+
+  const leaveWaitlist = useCallback(async (sectionId: string) => {
+    setWaitlist((prev) => {
+      const next = prev.filter((w) => w.sectionId !== sectionId);
+      hasWaitlistRef.current = next.length > 0;
+      return next;
+    });
+    try {
+      await fetch("/api/waitlist/leave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionId }),
+      });
+      toast("Left the waitlist");
+    } catch {
+      // best-effort — the panel is already updated
+    }
+  }, []);
+
+  // Run the smart waitlist pass on load, then again whenever seats change — so a
+  // freed seat is claimed within one poll if it still fits the schedule.
+  useEffect(() => {
+    if (planHydrated) processWaitlist();
+  }, [planHydrated, processWaitlist]);
+  useEffect(() => {
+    if (updatedAt && hasWaitlistRef.current) processWaitlist();
+  }, [updatedAt, processWaitlist]);
 
   const submitRegistration = useCallback(async () => {
     setSubmitting(true);
@@ -284,7 +446,19 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
         )}
       </div>
 
-      <StatStrip profile={profile} summary={summary} seatStatus={seatStatus} seatsUpdatedAt={updatedAt} />
+      <StatStrip profile={profile} summary={summary} creditLimit={creditLimit} seatStatus={seatStatus} seatsUpdatedAt={updatedAt} />
+
+      {selected.length === 0 && hasSections && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/30 bg-accent-soft/40 px-4 py-3">
+          <p className="flex items-center gap-2 text-[13px] font-medium text-accent-fg">
+            <Sparkles className="size-4 shrink-0" aria-hidden />
+            New term — not sure where to start? Build a balanced, conflict-free semester within your credit limit in one click.
+          </p>
+          <Button variant="primary" size="sm" onClick={optimize} className="shrink-0 gap-1.5">
+            <Sparkles aria-hidden /> Optimize my semester
+          </Button>
+        </div>
+      )}
 
       {!hasSections && courses.length > 0 && (
         <div className="rounded-xl border border-accent/20 bg-accent-soft/50 px-4 py-3 text-[13px] text-accent-fg">
@@ -301,7 +475,9 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
           stagedIds={stagedSet}
           flashIds={flashIds}
           evaluate={evaluate}
+          suggestAlternative={suggestAlt}
           onToggle={toggle}
+          onWaitlist={joinWaitlist}
           onPreview={setPreviewId}
         />
 
@@ -327,15 +503,27 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
               <CardTitle className="flex items-center gap-2">
                 <CalendarDays className="size-4 text-zinc-400" aria-hidden /> Weekly timetable
               </CardTitle>
-              <ul className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500" aria-label="Legend">
-                <li className="flex items-center gap-1.5">
-                  <span className="size-3 rounded-[3px] border border-dashed border-accent bg-accent-soft" /> Preview
-                </li>
-                <li className="flex items-center gap-1.5">
-                  <span className="conflict-stripes size-3 rounded-[3px] border border-red-400" /> Conflict
-                </li>
-                <li className="tnum font-mono text-zinc-400">LEC · PRA · LAB</li>
-              </ul>
+              <div className="flex flex-wrap items-center gap-3">
+                <ul className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500" aria-label="Legend">
+                  <li className="flex items-center gap-1.5">
+                    <span className="size-3 rounded-[3px] border border-dashed border-accent bg-accent-soft" /> Preview
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <span className="conflict-stripes size-3 rounded-[3px] border border-red-400" /> Conflict
+                  </li>
+                  <li className="tnum font-mono text-zinc-400">LEC · PRA · LAB</li>
+                </ul>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={optimize}
+                  disabled={!hasSections}
+                  className="gap-1.5"
+                  title="Auto-build a conflict-free, balanced plan within your advised credit load"
+                >
+                  <Sparkles aria-hidden /> Optimize
+                </Button>
+              </div>
             </CardHeader>
             <TimetableGrid
               sections={selected}
@@ -362,6 +550,40 @@ export function RegistrationWorkspace({ profile, transcript, courses, department
             onRemove={requestRemove}
             onConfirmRegister={() => setConfirmRegister(true)}
           />
+
+          {waitlist.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Hourglass className="size-4 text-zinc-400" aria-hidden /> Waitlist
+                </CardTitle>
+                <span className="tnum text-xs text-zinc-400">{waitlist.length}</span>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
+                  {waitlist.map((w) => (
+                    <li key={w.sectionId} className="flex items-center justify-between gap-3 px-3 py-2.5 text-[13px]">
+                      <span className="tnum font-mono font-semibold text-zinc-900">{w.course}</span>
+                      <span className="flex items-center gap-2.5">
+                        <span className="text-xs text-zinc-500">position {w.position}</span>
+                        <button
+                          type="button"
+                          onClick={() => leaveWaitlist(w.sectionId)}
+                          className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-50"
+                          aria-label={`Leave the ${w.course} waitlist`}
+                        >
+                          Leave
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-zinc-400">
+                  We'll enroll you automatically when a seat opens and it still fits your schedule and credit limit.
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 

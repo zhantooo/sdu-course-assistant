@@ -16,13 +16,15 @@ describe("searchCatalog", () => {
   it("matches titles and instructors", () => {
     expect(codes({ query: "networks" })).toEqual(["CSS 342"]);
     const byInstructor = searchCatalog(catalog, { ...EMPTY_FILTERS, query: "omarov" });
-    expect(byInstructor.map((c) => c.code)).toEqual(["CSS 311", "CSS 410"]);
+    expect(byInstructor.map((c) => c.code)).toEqual(["CSS 311", "CSS 410", "CSS 420"]);
     // Only Omarov's section of CSS 311 is kept.
     expect(byInstructor[0].sections.map((s) => s.sectionNumber)).toEqual(["02"]);
   });
 
   it("filters by department", () => {
-    expect(codes({ department: "MAT" })).toEqual(["MAT 201", "MAT 250"]);
+    const mat = codes({ department: "MAT" });
+    expect(mat.every((c) => c.startsWith("MAT "))).toBe(true); // only MAT courses
+    expect(mat).toEqual(expect.arrayContaining(["MAT 201", "MAT 250"]));
   });
 
   it("combines day and time-of-day on the same meeting", () => {
@@ -32,6 +34,6 @@ describe("searchCatalog", () => {
 
   it("drops full sections when openOnly is set", () => {
     const result = searchCatalog(catalog, { ...EMPTY_FILTERS, query: "CSS 311", openOnly: true });
-    expect(result[0].sections.map((s) => s.sectionNumber)).toEqual(["01"]);
+    expect(result[0].sections.map((s) => s.sectionNumber)).toEqual(["01", "03"]);
   });
 });

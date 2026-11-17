@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Check, CheckCircle2, CircleSlash, Gauge, Lock, Plus, RefreshCw, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, CircleSlash, Gauge, Hourglass, Lock, Plus, RefreshCw, RotateCcw, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatMeeting, MEETING_KIND_ABBR } from "@/lib/domain/time";
@@ -19,7 +19,9 @@ interface CourseResultCardProps {
   stagedIds: ReadonlySet<string>;
   flashIds: ReadonlySet<string>;
   evaluate: (section: Section) => CandidateEvaluation;
+  suggestAlternative: (section: Section) => Section | null;
   onToggle: (section: Section) => void;
+  onWaitlist: (section: Section) => void;
   onPreview: (sectionId: string | null) => void;
 }
 
@@ -115,16 +117,24 @@ function SectionRow({
   stagedIds,
   flashIds,
   evaluate,
+  suggestAlternative,
   onToggle,
+  onWaitlist,
   onPreview,
 }: CourseResultCardProps & { section: Section }) {
   const staged = stagedIds.has(section.id);
   const evaluation = evaluate(section);
   const blocked = !staged && evaluation.blockers.length > 0;
+  // A full section the student is otherwise eligible for can be waitlisted.
+  const waitlistable =
+    blocked && evaluation.blockers.length === 1 && evaluation.blockers[0].code === "SECTION_FULL";
   const clash = !staged && !blocked && evaluation.warnings.some((w) => w.code === "TIME_CONFLICT");
   const firstBlocker = evaluation.blockers[0]?.code as keyof typeof BLOCKED_LABEL | undefined;
   const blockedAs = blocked && firstBlocker ? BLOCKED_LABEL[firstBlocker] : null;
   const reason = blocked ? evaluation.blockers.map((b) => b.message).join(" ") : clash ? evaluation.warnings[0].message : undefined;
+  // Smart suggestion: when this section clashes or is full, surface the best
+  // open, clash-free sibling right here so the student sees it, not just a toast.
+  const alternative = clash || waitlistable ? suggestAlternative(section) : null;
 
   return (
     <li
@@ -165,16 +175,24 @@ function SectionRow({
 
         <Button
           size="sm"
-          variant={staged ? "success" : blocked ? "ghost" : evaluation.replaces ? "outline" : "primary"}
+          variant={staged ? "success" : waitlistable ? "outline" : blocked ? "ghost" : evaluation.replaces ? "outline" : "primary"}
           aria-pressed={staged}
-          aria-disabled={blocked || undefined}
-          title={reason}
-          onClick={() => onToggle(section)}
-          className={cn("mt-0.5 w-[76px]", blocked && "text-zinc-400")}
+          aria-disabled={blocked && !waitlistable ? true : undefined}
+          title={waitlistable ? "Section full — join the waitlist for smart auto-enroll" : reason}
+          onClick={() => (waitlistable ? onWaitlist(section) : onToggle(section))}
+          className={cn(
+            "mt-0.5 min-w-[76px]",
+            blocked && !waitlistable && "text-zinc-400",
+            waitlistable && "border-zinc-300 bg-zinc-200 text-zinc-700 shadow-none hover:bg-zinc-300 hover:text-zinc-900",
+          )}
         >
           {staged ? (
             <>
               <Check aria-hidden /> Added
+            </>
+          ) : waitlistable ? (
+            <>
+              <Hourglass aria-hidden /> Waitlist
             </>
           ) : blockedAs ? (
             <>
@@ -195,6 +213,25 @@ function SectionRow({
           </span>
         </Button>
       </div>
+
+      {alternative && (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-accent/25 border-l-4 border-l-accent bg-accent-soft px-2.5 py-2 shadow-sm">
+          <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold text-accent-fg">
+            <Sparkles className="size-3.5 shrink-0 text-accent" aria-hidden />
+            <span className="truncate">
+              {waitlistable ? "Smart pick" : "Clash-free"} — take §{alternative.sectionNumber} · {alternative.instructorName}
+            </span>
+          </span>
+          <Button
+            size="sm"
+            variant="accent"
+            className="h-6 shrink-0 gap-1 px-2.5 text-[11px]"
+            onClick={() => onToggle(alternative)}
+          >
+            Take §{alternative.sectionNumber}
+          </Button>
+        </div>
+      )}
     </li>
   );
 }
